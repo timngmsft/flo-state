@@ -22,6 +22,22 @@ brew install --cask altimor/tap/flo-state
 
 Or download the latest `.zip` from [Releases](https://github.com/Altimor/flo-state/releases/latest). The app updates itself (Sparkle).
 
+## Recent files and folders
+
+The welcome screen lists recently opened folders and files, newest first, with
+their paths to distinguish similarly named items. Select a folder to reopen its
+workspace and saved tabs, or a file to reopen it through the normal file-opening
+flow. The lists scroll and persist between launches (up to 10 folders and 30
+files); unavailable items are hidden.
+
+Use **Settings > General > Clear Recent History** to empty both lists in every
+open window. This removes only the history, not your files, folders, or saved
+workspace sessions. Opening another item starts recording history again.
+
+The existing **General > On launch** options still control whether the last
+workspace and its tabs reopen instead of the welcome screen. The sidebar's
+Recents section is separate: it lists workspace files by modification time.
+
 ## Layout
 
 | Path | What |

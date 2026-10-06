@@ -1,6 +1,15 @@
 /* Flo State UI strings. Key = English source text (base language).
  * Generated from the sources; translations live in <lang>.lproj/Localizable.strings. */
 
+/* Recent history: welcome screen and Settings > General. */
+"Recent folders" = "সাম্প্রতিক ফোল্ডার";
+"Recent files" = "সাম্প্রতিক ফাইল";
+"Clear Recent History" = "সাম্প্রতিক ইতিহাস মুছুন";
+"Clears the list without deleting files or folders." = "ফাইল বা ফোল্ডার না মুছে তালিকাটি খালি করে।";
+"Failed to clear recent history: %@" = "সাম্প্রতিক ইতিহাস মোছা যায়নি: %@";
+"Failed to save recent history: %@" = "সাম্প্রতিক ইতিহাস সংরক্ষণ করা যায়নি: %@";
+"This recent item is no longer available: %@" = "এই সাম্প্রতিক আইটেমটি আর পাওয়া যাচ্ছে না: %@";
+
 /* EditorModel.swift; TabStripView.swift; Tab title / tooltip of the + button (new empty tab). */
 "New tab" = "নতুন ট্যাব";
 

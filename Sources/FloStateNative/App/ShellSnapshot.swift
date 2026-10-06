@@ -2,14 +2,37 @@ import AppKit
 import FloCore
 import FloKit
 
-/// Welcome screen (no workspace): "Open Folder" / "Open File" / "Start from Scratch" (a new ~/Documents/Notebook with a Welcome note).
+/// Welcome screen (no workspace): opening actions and persistent recent files/folders.
 final class WelcomeView: FlippedView {
     let model: ShellModel   // strong: AppKit can still lay a view out after its window controller (the other owner) is gone
+    let folders: WelcomeRecentsView
+    let files: WelcomeRecentsView
     var onAddFolder: (() -> Void)?
     var onOpenFile: (() -> Void)?
     var onStartFromScratch: (() -> Void)?
-    init(model: ShellModel) { self.model = model; super.init(frame: .zero) }
+    init(model: ShellModel) {
+        self.model = model
+        folders = WelcomeRecentsView(model: model, isDirectory: true)
+        files = WelcomeRecentsView(model: model, isDirectory: false)
+        super.init(frame: .zero)
+        addSubview(folders)
+        addSubview(files)
+        reloadRecents()
+    }
     required init?(coder: NSCoder) { fatalError() }
+
+    var hasRecentItems: Bool { !folders.rows.isEmpty || !files.rows.isEmpty }
+
+    func reloadRecents() {
+        folders.reload(model.recentFolderPaths)
+        files.reload(model.recentFiles.map(\.path))
+        needsLayout = true
+        needsDisplay = true
+    }
+
+    private var buttonTop: CGFloat {
+        hasRecentItems ? 64 + CGFloat(messageLines.count) * 21.125 + 28 : bounds.height / 2 + 4
+    }
 
     static let titles = ["Open Folder", "Open File", "Start from Scratch"]
     /// Localized titles and their button rects: one centred row, or a centred
@@ -19,7 +42,7 @@ final class WelcomeView: FlippedView {
         let titles = Self.titles.map { L($0) }
         let widths = titles.map { TextStyle(font: f, color: .black).width($0) + 32 }
         let total = widths.reduce(0, +) + 12 * CGFloat(widths.count - 1)
-        let y = bounds.height / 2 + 4
+        let y = buttonTop
         if total > bounds.width - 32 {
             let w = min(widths.max() ?? 0, max(0, bounds.width - 32))
             return titles.enumerated().map { i, t in (t, CGRect(x: (bounds.width - w) / 2, y: y + CGFloat(i) * (35.5 + 8), width: w, height: 35.5)) }
@@ -33,7 +56,37 @@ final class WelcomeView: FlippedView {
 
     /// The prompt above the buttons, wrapped to 252pt (wider for long languages).
     var messageLines: [String] {
-        TextWrap.lines(L("Open a folder of notes or a single file, or start from scratch."), font: UIFonts.ui(model.values), width: 252)
+        let width = hasRecentItems ? min(460, max(1, bounds.width - 48)) : 252
+        return TextWrap.lines(L("Open a folder of notes or a single file, or start from scratch."), font: UIFonts.ui(model.values), width: width)
+    }
+
+    override func layout() {
+        super.layout()
+        folders.isHidden = folders.rows.isEmpty
+        files.isHidden = files.rows.isEmpty
+        let sections = [folders, files].filter { !$0.isHidden }
+        guard !sections.isEmpty else { return }
+        let width = min(800, max(0, bounds.width - 48))
+        let top = (buttons.map { $0.1.maxY }.max() ?? buttonTop) + 32
+        let available = max(0, bounds.height - top - 24)
+        if sections.count == 2, width >= 600 {
+            let columnWidth = (width - 32) / 2
+            let height = min(available, sections.map(\.preferredHeight).max() ?? 0)
+            for (i, section) in sections.enumerated() {
+                section.frame = CGRect(x: (bounds.width - width) / 2 + CGFloat(i) * (columnWidth + 32),
+                                       y: top, width: columnWidth, height: height)
+            }
+        } else {
+            let columnWidth = min(480, width)
+            let height = max(0, (available - CGFloat(sections.count - 1) * 20) / CGFloat(sections.count))
+            var y = top
+            for section in sections {
+                let h = min(height, section.preferredHeight)
+                section.frame = CGRect(x: (bounds.width - columnWidth) / 2, y: y, width: columnWidth, height: h)
+                y += h + 20
+            }
+        }
+        sections.forEach { $0.needsLayout = true }
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -42,7 +95,7 @@ final class WelcomeView: FlippedView {
         p.bg.setFill(); bounds.fill(using: .sourceOver)
         let style = TextStyle(font: UIFonts.ui(model.values), color: p.textMuted)
         let lines = messageLines
-        var y = bounds.height / 2 - 24 - CGFloat(lines.count) * 21.125
+        var y = buttonTop - 28 - CGFloat(lines.count) * 21.125
         for l in lines { style.draw(l, x: (bounds.width - style.width(l)) / 2, lineTop: y, lineHeight: 21.125, in: ctx); y += 21.125 }
         let bf = UIFonts.ui(model.values, weight: .medium)
         for (i, (t, r)) in buttons.enumerated() {
@@ -56,6 +109,124 @@ final class WelcomeView: FlippedView {
                 let ts = TextStyle(font: bf, color: p.textSecondary)
                 ts.draw(t, x: r.minX + max(16, (r.width - ts.width(t)) / 2), lineTop: r.minY + 8, lineHeight: 19.5, maxWidth: r.width - 32, in: ctx)
             }
+        }
+    }
+
+    final class WelcomeRecentsView: FlippedView {
+        let model: ShellModel
+        let isDirectory: Bool
+        let scroll = NSScrollView()
+        let document = FlippedView()
+        private(set) var rows: [RecentItemButton] = []
+        static let rowHeight: CGFloat = 48
+
+        init(model: ShellModel, isDirectory: Bool) {
+            self.model = model
+            self.isDirectory = isDirectory
+            super.init(frame: .zero)
+            scroll.drawsBackground = false
+            scroll.contentView.drawsBackground = false
+            scroll.automaticallyAdjustsContentInsets = false
+            scroll.hasVerticalScroller = !ShellSnapshot.active
+            scroll.autohidesScrollers = true
+            document.autoresizingMask = [.width]
+            scroll.documentView = document
+            scroll.setAccessibilityLabel(heading)
+            addSubview(scroll)
+        }
+        required init?(coder: NSCoder) { fatalError() }
+
+        var heading: String { isDirectory ? L("Recent folders") : L("Recent files") }
+        var preferredHeight: CGFloat { 28 + min(240, CGFloat(rows.count) * Self.rowHeight) }
+
+        func reload(_ paths: [String]) {
+            if paths != rows.map(\.path) {
+                rows.forEach { $0.removeFromSuperview() }
+                rows = paths.map { RecentItemButton(model: model, path: $0, isDirectory: isDirectory) }
+                rows.forEach(document.addSubview)
+                scroll.contentView.scroll(to: .zero)
+            }
+            rows.forEach { $0.needsDisplay = true }
+            needsLayout = true
+            needsDisplay = true
+        }
+
+        override func layout() {
+            super.layout()
+            scroll.frame = CGRect(x: 0, y: 28, width: bounds.width, height: max(0, bounds.height - 28))
+            document.frame = CGRect(x: 0, y: 0, width: scroll.contentSize.width,
+                                    height: max(scroll.contentSize.height, CGFloat(rows.count) * Self.rowHeight))
+            scroll.tile()
+            document.setFrameSize(NSSize(width: scroll.contentSize.width, height: document.frame.height))
+            for (i, row) in rows.enumerated() {
+                row.frame = CGRect(x: 0, y: CGFloat(i) * Self.rowHeight, width: document.bounds.width, height: Self.rowHeight)
+            }
+            scroll.suppressScrollPocket()
+        }
+
+        override func draw(_ dirtyRect: NSRect) {
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+            TextStyle(font: UIFonts.ui(model.values, weight: .medium), color: model.palette_.textSecondary)
+                .draw(heading, x: 10, lineTop: 0, lineHeight: 20, maxWidth: bounds.width - 20, in: ctx)
+        }
+    }
+
+    /// Native button behavior (keyboard and accessibility), drawn like the rest of the shell.
+    final class RecentItemButton: NSButton {
+        let model: ShellModel
+        let path: String
+        let isDirectory: Bool
+        private var hovering = false { didSet { needsDisplay = true } }
+
+        init(model: ShellModel, path: String, isDirectory: Bool) {
+            self.model = model
+            self.path = path
+            self.isDirectory = isDirectory
+            super.init(frame: .zero)
+            let name = (path as NSString).lastPathComponent
+            title = name.isEmpty ? path : name
+            toolTip = path
+            setAccessibilityLabel(title)
+            setAccessibilityHelp(path)
+            isBordered = false
+            setButtonType(.momentaryPushIn)
+            target = self
+            action = #selector(open)
+            focusRingType = .exterior
+            autoresizingMask = [.width]
+        }
+        required init?(coder: NSCoder) { fatalError() }
+        override var isFlipped: Bool { true }
+        override var acceptsFirstResponder: Bool { true }
+        override var focusRingMaskBounds: NSRect { bounds.insetBy(dx: 2, dy: 2) }
+        override func drawFocusRingMask() { roundedPath(focusRingMaskBounds, 6).fill() }
+
+        override func becomeFirstResponder() -> Bool {
+            guard super.becomeFirstResponder() else { return false }
+            scrollToVisible(bounds)
+            return true
+        }
+
+        @objc func open() { model.openRecentItem(path, isDirectory: isDirectory) }
+
+        override func updateTrackingAreas() {
+            trackingAreas.forEach(removeTrackingArea)
+            addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+        }
+        override func mouseEntered(with event: NSEvent) { hovering = true }
+        override func mouseExited(with event: NSEvent) { hovering = false }
+
+        override func draw(_ dirtyRect: NSRect) {
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+            let p = model.palette_
+            if hovering || isHighlighted { p.surfaceSubtle.setFill(); roundedPath(bounds.insetBy(dx: 2, dy: 2), 6).fill() }
+            (isDirectory ? Icon.folderClosed : Icon.file)
+                .draw(in: CGRect(x: 10, y: 15, width: 18, height: 18), color: p.textIconMuted, ctx: ctx)
+            TextStyle(font: UIFonts.ui(model.values, weight: .medium), color: p.textPrimary)
+                .draw(title, x: 38, lineTop: 5, lineHeight: 19.5, maxWidth: bounds.width - 48, in: ctx)
+            let parent = ((path as NSString).deletingLastPathComponent as NSString).abbreviatingWithTildeInPath
+            TextStyle(font: UIFonts.ui(model.values, size: 11), color: p.textMuted)
+                .draw(parent, x: 38, lineTop: 26, lineHeight: 16, maxWidth: bounds.width - 48, in: ctx)
         }
     }
 

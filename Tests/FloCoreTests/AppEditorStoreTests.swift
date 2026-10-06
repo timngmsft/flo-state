@@ -836,6 +836,92 @@ final class AppSessionAndRecentsTests: XCTestCase {
         editor.setActiveFile("/a.md")
         XCTAssertEqual(recorded, ["/a.md", "/b.md", "/a.md"])
     }
+
+    func testRecentFilesRecorderWaitsForSuccessfulLoad() async {
+        let (editor, files) = makeEditor(ManualScheduler())
+        files.contents["/a.md"] = "a"
+        var recorded: [String] = []
+        var sawLoading = false
+        _ = RecentFilesRecorder(editor: editor, record: { recorded.append($0) })
+        editor.observers.append { [weak editor] _ in
+            if editor?.activeFilePath == "/a.md", editor?.file("/a.md")?.isLoading == true {
+                sawLoading = true
+                XCTAssertTrue(recorded.isEmpty, "a loading placeholder is not a successful open")
+            }
+        }
+        await editor.openCompactFile("/a.md")
+        XCTAssertTrue(sawLoading)
+        XCTAssertEqual(recorded, ["/a.md"])
+        editor.updateCursorPos("/a.md", 1)
+        editor.updateFrontmatter("/a.md", "title: Changed")
+        XCTAssertEqual(recorded, ["/a.md"], "content-only changes do not record the file again")
+    }
+
+    func testRecentFilesRecorderSkipsFailedLoads() async {
+        let (editor, _) = makeEditor(ManualScheduler())
+        var recorded: [String] = []
+        _ = RecentFilesRecorder(editor: editor, record: { recorded.append($0) })
+        await editor.openCompactFile("/missing.md")
+        do {
+            try await editor.openFileInNewTab("/also-missing.md")
+            XCTFail("opening a missing file should fail")
+        } catch {
+            XCTAssertEqual(error as? EditorStore.OpenFailed, EditorStore.OpenFailed(path: "/also-missing.md"))
+        }
+        XCTAssertTrue(recorded.isEmpty)
+    }
+
+    func testClearingRecentsPersistsWithoutDeletingDocumentsOrSessions() throws {
+        let appData = AppDataDirectory(baseURL: URL(fileURLWithPath: dir + "/app"))
+        let folders = RecentWorkspacesStore(appData: appData)
+        let files = RecentFilesStore(appData: appData)
+        let sessions = SessionStore(appData: appData)
+        let root = dir + "/notes"
+        let path = root + "/a.md"
+        AppTestFS.write(path, "# A")
+        try folders.record(root)
+        try files.record(path)
+        let tab = SessionTab(location: SerializedLocation(kind: "file", payload: [("path", .string(path))]))
+        try sessions.save(root: root, tabs: [tab], activeIndex: 0)
+
+        try folders.clear()
+        try files.clear()
+        XCTAssertEqual(RecentWorkspacesStore(appData: appData).load(), [])
+        XCTAssertEqual(RecentFilesStore(appData: appData).load(), [])
+        XCTAssertEqual(AppTestFS.read(path), "# A")
+        XCTAssertTrue(WorkspaceFS.isDirectory(root))
+        XCTAssertEqual(sessions.load(root: root), SessionData(tabs: [tab], activeIndex: 0))
+        try files.record(path)
+        try folders.record(root)
+        XCTAssertEqual(files.load().map(\.path), [path])
+        XCTAssertEqual(folders.load(), [root])
+    }
+
+    func testClearRecentsHandlesMissingAndLegacyHistory() throws {
+        let files = RecentFilesStore(url: URL(fileURLWithPath: dir + "/app/recent_files.json"))
+        let folders = RecentWorkspacesStore(url: URL(fileURLWithPath: dir + "/app/recent_workspaces.json"))
+        try files.clear()
+        try folders.clear()
+        AppTestFS.write(files.url.path, #"["/missing.md", "/old.md"]"#)
+        AppTestFS.write(folders.url.path, #"["/missing-folder"]"#)
+        try files.clear()
+        try folders.clear()
+        XCTAssertEqual(AppTestFS.read(files.url.path), "[]")
+        XCTAssertEqual(AppTestFS.read(folders.url.path), "[]")
+    }
+
+    func testClearRecentsSurfacesWriteFailures() throws {
+        let files = RecentFilesStore(url: URL(fileURLWithPath: dir + "/recent_files.json"))
+        let folders = RecentWorkspacesStore(url: URL(fileURLWithPath: dir + "/recent_workspaces.json"))
+        AppTestFS.mkdir(files.url.path)
+        AppTestFS.mkdir(folders.url.path)
+        XCTAssertThrowsError(try files.clear())
+        XCTAssertThrowsError(try folders.clear())
+        XCTAssertTrue(WorkspaceFS.isDirectory(files.url.path))
+        XCTAssertTrue(WorkspaceFS.isDirectory(folders.url.path))
+        XCTAssertFalse(WorkspaceFS.exists(files.url.path + ".tmp"))
+        XCTAssertFalse(WorkspaceFS.exists(folders.url.path + ".tmp"))
+    }
 }
 
 final class AppWorkspaceTreeTests: XCTestCase {

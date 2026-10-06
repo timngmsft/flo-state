@@ -737,6 +737,10 @@ final class ShellWindowController: NSWindowController, NSWindowDelegate {
         if s.isEmpty { return }
         let ft = Date()
         defer { LaunchTrace.note("flush \(s.sorted())", since: ft) }
+        if s.contains("recents") || s.contains("tabs") || s.contains("settings") {
+            if model.root == nil && model.editor.tabs.isEmpty { root.welcome.reloadRecents() }
+            root.compactHeader.needsDisplay = true
+        }
         if s.contains("layout") { root.area.needsLayout = true }
         if s.contains("tabs") || s.contains("settings") || s.contains("layout") {
             root.area.reloadTabs()
@@ -822,6 +826,7 @@ final class ShellWindowController: NSWindowController, NSWindowDelegate {
 
     /// `useJumpToBottomOnReturn.onFocus`.
     func didActivate(nowMs: Double = Date().timeIntervalSince1970 * 1000) {
+        if model.root == nil && model.editor.tabs.isEmpty { root.welcome.reloadRecents() }
         let away = nowMs - uiState.lastActivatedAt()
         if !model.readOnly { uiState.markActivated(nowMs) }
         model.maybeAutoInsertDaily()

@@ -112,7 +112,7 @@ final class ShellModel {
     /// Cmd-, / palette "Settings": the app-wide Settings window.
     var openSettingsWindow: () -> Void = {}
 
-    enum Change { case layout, sidebar, tabs, palette, settings, theme, editorFont, content }
+    enum Change { case layout, sidebar, tabs, palette, settings, theme, editorFont, content, recents }
     var observers: [(Change) -> Void] = []
     private var notifying = false
 
@@ -158,8 +158,7 @@ final class ShellModel {
         reconciler = FileChangeReconciler(editor: editor, reader: { path in try WorkspaceFS.readFile(path) })
         reconciler.onSidebarMetadataChanged = { [weak self] in self?.tree.bumpSidebarMetadataVersion(); self?.notify(.sidebar) }
         recentRecorder = RecentFilesRecorder(editor: editor) { [weak self] path in
-            guard let self = self, !self.readOnly else { return }
-            try? self.recentFilesStore.record(path, extensions: self.settings.supportedExtensions)
+            self?.recordRecentFile(path)
         }
         editor.observers.append { [weak self] change in self?.editorChanged(change) }
         editor.onRequestWindowClose = { [weak self] in self?.requestWindowClose() }
@@ -215,6 +214,36 @@ final class ShellModel {
         if old.raw["files.associations"] != values.raw["files.associations"] { watcher?.extensions = settings.supportedExtensions }
     }
 
+    // MARK: recent history
+
+    var recentFileExtensions: SupportedExtensions {
+        let extensions = Set(settings.supportedExtensions.extensions).union(PendingOpen.registeredTextExtensions)
+        return SupportedExtensions(patterns: extensions.sorted().map { "*." + $0 })
+    }
+
+    var recentFiles: [RecentFile] { recentFilesStore.list(extensions: recentFileExtensions) }
+    var recentFolderPaths: [String] { recentWorkspacesStore.load().filter(WorkspaceFS.isDirectory) }
+
+    func recordRecentFile(_ path: String) {
+        guard !readOnly else { return }
+        do {
+            try recentFilesStore.record(path, extensions: recentFileExtensions)
+            notify(.recents)
+        } catch {
+            alert(L("Failed to save recent history: %@", "\(error)"))
+        }
+    }
+
+    func recordRecentWorkspace(_ path: String) {
+        guard !readOnly else { return }
+        do {
+            try recentWorkspacesStore.record(path)
+            notify(.recents)
+        } catch {
+            alert(L("Failed to save recent history: %@", "\(error)"))
+        }
+    }
+
     // MARK: sidebar visibility (use-sidebar.ts)
 
     var sidebarPreferenceVisible: Bool { values.appearanceSidebarVisible }
@@ -240,10 +269,10 @@ final class ShellModel {
             openWorkspaceElsewhere(path)
             return
         }
-        if root == path, openFile == nil { return }
+        if root == path, openFile == nil { recordRecentWorkspace(path); return }
         let info: WorkspaceInfo
         do {
-            info = try WorkspaceBootstrap.open(path, settings: settings, recents: readOnly ? nil : recentWorkspacesStore)
+            info = try WorkspaceBootstrap.open(path, settings: settings, recents: nil)
         } catch {
             alert(L("Failed to open workspace: %@", "\(error)"))
             return
@@ -256,6 +285,7 @@ final class ShellModel {
         sessionAutosaver.disarm()
         editor.reset()
         root = info.root
+        recordRecentWorkspace(info.root)
         ignore = WorkspaceIgnore.load(root: URL(fileURLWithPath: info.root))
         var tt = Date()
         let idx = FileIndex(root: info.root)
@@ -834,6 +864,17 @@ final class ShellModel {
     /// Finder open. Its folder is NOT opened as a workspace: no scan, no sidebar, not
     /// added to recent workspaces (a note in ~/Downloads used to pull in the whole folder).
     var closeWindow: () -> Void = {}
+
+    func openRecentItem(_ path: String, isDirectory: Bool) {
+        guard let pending = PendingOpen.resolve(path, extensions: recentFileExtensions),
+              isDirectory ? pending.workspace != nil : pending.file != nil else {
+            alert(L("This recent item is no longer available: %@", path))
+            notify(.recents)
+            return
+        }
+        if isDirectory { openWorkspaceElsewhere(path) } else { openPickedFile(path) }
+    }
+
     func openPickedFile(_ path: String) {
         openDroppedPaths([path])
         if root == nil && editor.tabs.isEmpty { closeWindow() }
@@ -901,7 +942,7 @@ final class ShellModel {
         if isCompact && !q.isEmpty {
             // compact windows filter the global recents client-side
             let ql = q.lowercased()
-            files = recentFilesStore.list(limit: 30, extensions: settings.supportedExtensions).filter {
+            files = recentFiles.filter {
                 ($0.title ?? "").lowercased().contains(ql) || $0.name.lowercased().contains(ql) || $0.path.lowercased().contains(ql)
             }.map { PaletteItem(kind: .file($0.path), title: ($0.title?.isEmpty == false ? $0.title! : LinkPaths.getFileStem($0.name)),
                                 subtitle: LinkPaths.getParentDir($0.path)) }

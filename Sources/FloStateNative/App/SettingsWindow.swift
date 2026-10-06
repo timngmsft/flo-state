@@ -137,15 +137,34 @@ enum SettingsPanes {
 @MainActor
 final class SettingsBackend {
     let settings: AppSettings
+    let recentFilesStore: RecentFilesStore
+    let recentWorkspacesStore: RecentWorkspacesStore
     /// Called after every write (the app delegate reloads every window's settings).
     var onChange: () -> Void = {}
     /// UI refresh after a write (the Settings window re-syncs its controls).
     var refreshUI: () -> Void = {}
+    var onRecentsChange: () -> Void = {}
+    var alert: (String) -> Void = { NSLog("Flo State: %@", $0) }
 
     private func changed() { onChange(); refreshUI() }
 
     init(dataDir: AppDataDirectory) {
         settings = AppSettings(globalConfigDir: dataDir.baseURL)
+        recentFilesStore = RecentFilesStore(appData: dataDir)
+        recentWorkspacesStore = RecentWorkspacesStore(appData: dataDir)
+    }
+
+    var hasRecentHistory: Bool { !recentFilesStore.load().isEmpty || !recentWorkspacesStore.load().isEmpty }
+
+    func clearRecentHistory() {
+        do {
+            try recentFilesStore.clear()
+            try recentWorkspacesStore.clear()
+        } catch {
+            alert(L("Failed to clear recent history: %@", "\(error)"))
+        }
+        onRecentsChange()
+        refreshUI()
     }
 
     var values: SettingsValues { settings.values }
@@ -418,6 +437,7 @@ final class SettingsPaneController: NSViewController {
     unowned let backend: SettingsBackend
     private(set) var controls: [SettingControl] = []
     let restoreButton = NSButton(title: L("Restore Defaults"), target: nil, action: nil)
+    let clearRecentHistoryButton = NSButton(title: L("Clear Recent History"), target: nil, action: nil)
 
     init(pane: SettingsPanes.Pane, backend: SettingsBackend) {
         self.pane = pane
@@ -452,6 +472,22 @@ final class SettingsPaneController: NSViewController {
                     firstInGroup = false
                     if let h = c.help { grid.addRow(with: [NSGridCell.emptyContentView, h]).topPadding = -3 }
                 }
+            }
+            if pane.id == "general" {
+                let label = NSTextField(labelWithString: L("Recents") + ":")
+                label.alignment = .right
+                clearRecentHistoryButton.target = self
+                clearRecentHistoryButton.action = #selector(clearRecentHistory)
+                clearRecentHistoryButton.bezelStyle = .rounded
+                clearRecentHistoryButton.isEnabled = backend.hasRecentHistory
+                let row = grid.addRow(with: [label, clearRecentHistoryButton])
+                row.yPlacement = .center
+                row.topPadding = 14
+                let help = NSTextField(wrappingLabelWithString: L("Clears the list without deleting files or folders."))
+                help.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+                help.textColor = .secondaryLabelColor
+                help.preferredMaxLayoutWidth = 300
+                grid.addRow(with: [NSGridCell.emptyContentView, help]).topPadding = -3
             }
             grid.column(at: 0).xPlacement = .trailing
             grid.column(at: 1).xPlacement = .leading
@@ -505,7 +541,12 @@ final class SettingsPaneController: NSViewController {
         syncAll()
     }
 
-    func syncAll() { controls.forEach { $0.sync() } }
+    @objc func clearRecentHistory() { backend.clearRecentHistory() }
+
+    func syncAll() {
+        controls.forEach { $0.sync() }
+        clearRecentHistoryButton.isEnabled = backend.hasRecentHistory
+    }
 
     func control(_ key: String) -> SettingControl? { controls.first { $0.def.key == key } }
 }
@@ -542,6 +583,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         super.init(window: w)
         w.delegate = self
         backend.refreshUI = { [weak self] in self?.syncAll() }
+        backend.alert = { [weak self] message in
+            let alert = NSAlert()
+            alert.messageText = message
+            if let w = self?.window, w.isVisible { alert.beginSheetModal(for: w) } else { alert.runModal() }
+        }
         tabs.addObserver(self, forKeyPath: "selectedTabViewItemIndex", options: [.new], context: nil)
         updateTitle()
     }

@@ -1,6 +1,15 @@
 /* Flo State UI strings. Key = English source text (base language).
  * Generated from the sources; translations live in <lang>.lproj/Localizable.strings. */
 
+/* Recent history: welcome screen and Settings > General. */
+"Recent folders" = "المجلدات الأخيرة";
+"Recent files" = "الملفات الأخيرة";
+"Clear Recent History" = "مسح السجل الأخير";
+"Clears the list without deleting files or folders." = "يمسح القائمة دون حذف الملفات أو المجلدات.";
+"Failed to clear recent history: %@" = "تعذر مسح السجل الأخير: %@";
+"Failed to save recent history: %@" = "تعذر حفظ السجل الأخير: %@";
+"This recent item is no longer available: %@" = "لم يعد هذا العنصر الأخير متاحًا: %@";
+
 /* EditorModel.swift; TabStripView.swift; Tab title / tooltip of the + button (new empty tab). */
 "New tab" = "علامة تبويب جديدة";
 

@@ -160,6 +160,48 @@ final class SettingsWindowTests: XCTestCase {
         wc.syncAll()
         XCTAssertEqual(c.checkbox?.state, .off)
     }
+
+    func testClearRecentHistoryButtonClearsBothStoresAndDisablesWhenEmpty() throws {
+        let general = pane("general")
+        XCTAssertFalse(general.clearRecentHistoryButton.isEnabled)
+        let path = data + "/notes/a.md"
+        TFS.write(path, "# A")
+        try backend.recentFilesStore.record(path)
+        try backend.recentWorkspacesStore.record(data + "/notes")
+        try backend.recentWorkspacesStore.record(data + "/unavailable-folder")
+        var recentsChanges = 0
+        backend.onRecentsChange = { recentsChanges += 1 }
+        wc.syncAll()
+        XCTAssertTrue(general.clearRecentHistoryButton.isEnabled)
+        let originalConfig = config
+
+        general.clearRecentHistoryButton.performClick(nil)
+        XCTAssertEqual(backend.recentFilesStore.load(), [])
+        XCTAssertEqual(backend.recentWorkspacesStore.load(), [])
+        XCTAssertFalse(general.clearRecentHistoryButton.isEnabled)
+        XCTAssertEqual(recentsChanges, 1)
+        XCTAssertEqual(changes, 0, "clearing history is not a config change")
+        XCTAssertEqual(config, originalConfig)
+        XCTAssertEqual(TFS.read(path), "# A")
+    }
+
+    func testClearRecentHistoryReportsFailureAndRefreshesPartialChanges() throws {
+        let path = data + "/a.md"
+        TFS.write(path, "a")
+        try backend.recentFilesStore.record(path)
+        try FileManager.default.createDirectory(at: backend.recentWorkspacesStore.url, withIntermediateDirectories: true)
+        var alerts: [String] = []
+        var refreshes = 0
+        backend.alert = { alerts.append($0) }
+        backend.onRecentsChange = { refreshes += 1 }
+        backend.clearRecentHistory()
+        XCTAssertEqual(alerts.count, 1)
+        XCTAssertTrue(alerts.first?.hasPrefix("Failed to clear recent history:") == true)
+        XCTAssertEqual(refreshes, 1)
+        XCTAssertEqual(backend.recentFilesStore.load(), [], "successful partial clears are reflected in the UI")
+        XCTAssertTrue(WorkspaceFS.isDirectory(backend.recentWorkspacesStore.url.path))
+        XCTAssertEqual(TFS.read(path), "a")
+    }
 }
 
 /// App-level wiring: one reusable window; changes reach every workspace window.

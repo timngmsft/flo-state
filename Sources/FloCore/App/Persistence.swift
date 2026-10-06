@@ -170,6 +170,7 @@ public final class RecentWorkspacesStore {
     /// Hard-coded in the Rust (`truncate(10)`), independent of `workspace.max-recent-workspaces`.
     public static let maxCount = 10
     public let url: URL
+    private let lock = NSLock()
 
     public init(url: URL) { self.url = url }
     public convenience init(appData: AppDataDirectory) { self.init(url: appData.recentWorkspacesURL) }
@@ -182,6 +183,7 @@ public final class RecentWorkspacesStore {
 
     /// `save_recent_workspace`: dedupe, push front, cap at 10.
     public func record(_ canonicalPath: String) throws {
+        lock.lock(); defer { lock.unlock() }
         var list = load()
         list.removeAll { $0 == canonicalPath }
         list.insert(canonicalPath, at: 0)
@@ -190,14 +192,21 @@ public final class RecentWorkspacesStore {
     }
 
     public func remove(_ path: String) throws {
+        lock.lock(); defer { lock.unlock() }
         var list = load()
         list.removeAll { $0 == path }
         try write(list)
     }
 
+    public func clear() throws {
+        lock.lock(); defer { lock.unlock() }
+        try write([])
+    }
+
     private func write(_ list: [String]) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data(JSON.prettyString(.array(list.map { .string($0) })).utf8).write(to: url)
+        try AtomicFile.write(Data(JSON.prettyString(.array(list.map { .string($0) })).utf8),
+                             to: url, tempName: url.lastPathComponent + ".tmp")
     }
 }
 
@@ -275,6 +284,11 @@ public final class RecentFilesStore {
         try save(list)
     }
 
+    public func clear() throws {
+        lock.lock(); defer { lock.unlock() }
+        try save([])
+    }
+
     /// `get_recent_files_global`: entries that can't be stat'ed are hidden
     /// from the result but kept on disk.
     public func list(limit: Int? = nil, extensions: SupportedExtensions = .schemaDefault) -> [RecentFile] {
@@ -287,12 +301,16 @@ public final class RecentFilesStore {
     }
 }
 
-/// `global-recents.ts`: every file that becomes the active file is recorded once.
+/// Record each active file once it has loaded successfully, not its loading placeholder.
 @MainActor
 public final class RecentFilesRecorder {
     public init(editor: EditorStore, record: @escaping (String) -> Void) {
+        var lastRecordedPath: String?
         editor.observers.append { [weak editor] change in
-            guard let editor = editor, let path = editor.activeFilePath, path != change.previousActiveFilePath else { return }
+            guard let editor = editor else { return }
+            if editor.activeFilePath != change.previousActiveFilePath { lastRecordedPath = nil }
+            guard let path = editor.activeFilePath, path != lastRecordedPath, editor.file(path)?.isLoading == false else { return }
+            lastRecordedPath = path
             record(path)
         }
     }

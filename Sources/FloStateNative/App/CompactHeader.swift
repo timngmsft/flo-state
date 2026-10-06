@@ -75,7 +75,7 @@ final class CompactHeaderView: FlippedView {
 
     /// Recents list (excluding the active file), "Recents" header.
     func pickerMenu() -> NSMenu {
-        let items = model.recentFilesStore.list(limit: 30, extensions: model.settings.supportedExtensions)
+        let items = model.recentFiles
             .filter { $0.path != model.editor.activeFilePath }
         var menuItems: [NSMenuItem] = [NSMenuItem.sectionHeader(title: L("Recents"))]
         if items.isEmpty {

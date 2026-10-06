@@ -231,5 +231,35 @@ final class LocalizationTests: XCTestCase {
                 wc.window?.close()
             }
         }
+
+    }
+
+    func testWelcomeRecentListsFitInEveryLanguage() throws {
+        let f = ShellFixture(files: ["Notes.md": "# Notes"])
+        try f.model.recentWorkspacesStore.record(f.root)
+        try f.model.recentFilesStore.record(f.p("Notes.md"))
+        for lang in L10n.languages {
+            L10n.bundle = L10n.languageBundle(lang)!
+            for width in [1200.0, 400] {
+                let wc = ShellWindowController(model: f.model, frame: NSRect(x: -10000, y: -10000, width: width, height: 500), offscreen: true)
+                defer { wc.window?.close() }
+                wc.flush()
+                wc.root.layoutSubtreeIfNeeded()
+                let v = wc.root.welcome
+                XCTAssertTrue(v.hasRecentItems)
+                XCTAssertFalse(v.folders.frame.intersects(v.files.frame), lang)
+                for section in [v.folders, v.files] {
+                    XCTAssertTrue(v.bounds.contains(section.frame), "\(lang) @\(width)")
+                    XCTAssertGreaterThan(section.scroll.contentSize.height, 0, "\(lang) @\(width)")
+                    XCTAssertGreaterThan(section.frame.minY, v.buttons.map { $0.1.maxY }.max()!, lang)
+                }
+                XCTAssertEqual(v.folders.heading, table(lang)["Recent folders"])
+                XCTAssertEqual(v.files.heading, table(lang)["Recent files"])
+                if width == 1200, ["en", "de", "ja", "ar"].contains(lang) {
+                    wc.root.display()
+                    writePNG(wc.root, "welcome-recents-\(lang)")
+                }
+            }
+        }
     }
 }

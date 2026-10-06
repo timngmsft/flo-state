@@ -209,11 +209,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private(set) var settingsWindow: SettingsWindowController?
     private var broadcasting = false
+    private var broadcastingRecents = false
 
     func showSettings() {
         if settingsWindow == nil {
             let backend = SettingsBackend(dataDir: dataDir)
             backend.onChange = { [weak self] in self?.settingsChanged(from: nil) }
+            backend.onRecentsChange = { [weak self] in self?.recentsChanged(from: nil) }
             settingsWindow = SettingsWindowController(backend: backend)
         }
         settingsWindow?.show()
@@ -233,11 +235,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow?.syncAll()
     }
 
+    func recentsChanged(from source: ShellModel?) {
+        guard !broadcastingRecents else { return }
+        broadcastingRecents = true
+        defer { broadcastingRecents = false }
+        for m in adoptedModels.compactMap({ $0.model }) where m !== source { m.notify(.recents) }
+        settingsWindow?.syncAll()
+    }
+
     /// Hook a window's model into the Settings window + settings broadcast.
     func adopt(model: ShellModel) {
         model.openSettingsWindow = { [weak self] in self?.showSettings() }
         model.observers.append { [weak self, weak model] change in
             if change == .settings, let m = model { self?.settingsChanged(from: m) }
+            if change == .recents, let m = model { self?.recentsChanged(from: m) }
         }
         adoptedModels.append(Weak(model))
     }
@@ -263,7 +274,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let canonical = WorkspaceFS.canonicalize(root)
         if let existing = windows.first(where: { $0.model.root == canonical }) {
             existing.window?.makeKeyAndOrderFront(nil)
-            if let f = file { Task { try? await existing.model.editor.openFileInTabOrFocus(f) } }
+            existing.model.recordRecentWorkspace(canonical)
+            if let f = file { openFile(f, in: existing) }
             return
         }
         // Reuse an empty welcome window.
@@ -289,6 +301,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await c.model.editor.openCompactFile(file)
             c.flush()
             self?.show(c, secondary: (self?.windows.count ?? 0) > 1)
+        }
+    }
+
+    private func openFile(_ file: String, in controller: ShellWindowController) {
+        track {
+            let model = controller.model
+            let wasActive = model.editor.activeFilePath == file
+            do {
+                try await model.editor.openFileInTabOrFocus(file)
+                if wasActive, model.editor.file(file)?.isLoading == false { model.recordRecentFile(file) }
+            } catch {
+                model.alert(L("Failed to open in new tab: %@", "\(error)"))
+            }
         }
     }
 
@@ -339,7 +364,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 openWorkspaceWindow(owner, file: file, keepSession: true)
             } else if let c = windows.first(where: { $0.model.root != nil }) {
                 c.window?.makeKeyAndOrderFront(nil)
-                Task { try? await c.model.editor.openFileInTabOrFocus(file) }
+                openFile(file, in: c)
             } else {
                 openCompactWindow(file)
             }
